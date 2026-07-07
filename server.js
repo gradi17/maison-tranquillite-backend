@@ -103,7 +103,14 @@ app.post('/api/checkout', async (req, res) => {
 
     const session = await stripe.checkout.sessions.create({
       mode: 'payment',
-      payment_method_types: ['card'],
+      // "automatic_payment_methods" laisse Stripe choisir tout seul, parmi
+      // les moyens de paiement activés dans votre Dashboard (carte, Apple
+      // Pay, PayPal, Klarna, Scalapay...), ceux qui sont compatibles avec
+      // cette commande précise (montant, devise, pays). C'est plus robuste
+      // qu'une liste manuelle : si vous activez un nouveau moyen de paiement
+      // plus tard dans le Dashboard, il apparaîtra automatiquement ici,
+      // sans avoir besoin de retoucher ce fichier.
+      automatic_payment_methods: { enabled: true },
       line_items,
       // Stripe ajoute Apple Pay / Google Pay automatiquement au moyen
       // de paiement "card" dès qu'ils sont activés dans le Dashboard.

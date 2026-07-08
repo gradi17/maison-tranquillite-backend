@@ -76,6 +76,23 @@
   .color-row{display:flex;align-items:center;gap:12px;margin-top:14px;}
   .color-row label{margin:0;width:170px;flex-shrink:0;}
   .color-row input[type=color]{flex:1;}
+
+  .filter-row{display:flex;gap:14px;flex-wrap:wrap;margin-bottom:18px;}
+  .filter-row > div{flex:1;min-width:140px;}
+  .filter-row label{margin:0 0 4px;}
+  .filter-row select{
+    width:100%;padding:9px 10px;border:1px solid var(--border);border-radius:8px;
+    font-family:'Work Sans';font-size:13px;background:var(--sky);
+  }
+
+  .chart{display:flex;align-items:flex-end;gap:8px;height:160px;padding-top:10px;}
+  .chart-bar-wrap{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:flex-end;height:100%;}
+  .chart-bar{
+    width:100%;max-width:36px;background:var(--accent);border-radius:6px 6px 0 0;
+    min-height:2px;transition:height 0.2s;
+  }
+  .chart-value{font-size:10px;color:var(--ink-soft);margin-bottom:4px;white-space:nowrap;}
+  .chart-label{font-size:10px;color:var(--ink-soft);margin-top:6px;text-align:center;}
 </style>
 </head>
 <body>
@@ -142,19 +159,57 @@
     <!-- ONGLET STATISTIQUES -->
     <div class="tab-panel" id="tab-stats">
       <div class="card">
-        <h2>Visites & clics</h2>
-        <p class="hint">Une "visite" est comptée à chaque chargement de la boutique. Un "clic" est compté à chaque ajout au panier.</p>
+        <h2>Vue d'ensemble</h2>
+        <p class="hint">Une "visite" est comptée à chaque chargement de la boutique. Un "ajout au panier" est compté à chaque clic sur "Ajouter".</p>
         <div id="statsSummary"></div>
-        <table id="statsTable"><thead><tr><th>Mois</th><th>Visites</th><th>Clics (ajouts panier)</th></tr></thead><tbody></tbody></table>
+      </div>
+      <div class="card">
+        <h2>Détail par livre</h2>
+        <div class="filter-row">
+          <div>
+            <label>Année</label>
+            <select id="statsYearFilter" onchange="renderStatsDetail()"></select>
+          </div>
+          <div>
+            <label>Mois</label>
+            <select id="statsMonthFilter" onchange="renderStatsDetail()"></select>
+          </div>
+          <div>
+            <label>Livre</label>
+            <select id="statsBookFilter" onchange="renderStatsDetail()"></select>
+          </div>
+        </div>
+        <table id="statsDetailTable"><thead><tr><th>Livre</th><th>Ajouts au panier</th><th>Commandes</th></tr></thead><tbody></tbody></table>
       </div>
     </div>
 
     <!-- ONGLET CHIFFRE D'AFFAIRES -->
     <div class="tab-panel" id="tab-revenue">
       <div class="card">
-        <h2>Chiffre d'affaires</h2>
+        <h2>Chiffre d'affaires global</h2>
         <div id="revenueSummary"></div>
-        <table id="revenueTable"><thead><tr><th>Mois</th><th>Commandes</th><th>Total</th></tr></thead><tbody></tbody></table>
+      </div>
+      <div class="card">
+        <h2>Évolution par mois</h2>
+        <div id="revenueChart" class="chart"></div>
+      </div>
+      <div class="card">
+        <h2>Détail par livre</h2>
+        <div class="filter-row">
+          <div>
+            <label>Année</label>
+            <select id="revenueYearFilter" onchange="renderRevenueDetail()"></select>
+          </div>
+          <div>
+            <label>Mois</label>
+            <select id="revenueMonthFilter" onchange="renderRevenueDetail()"></select>
+          </div>
+          <div>
+            <label>Livre</label>
+            <select id="revenueBookFilter" onchange="renderRevenueDetail()"></select>
+          </div>
+        </div>
+        <table id="revenueDetailTable"><thead><tr><th>Livre</th><th>Quantité vendue</th><th>CA généré</th></tr></thead><tbody></tbody></table>
       </div>
     </div>
 
@@ -329,64 +384,178 @@ async function exportBackup(){
   URL.revokeObjectURL(url);
 }
 
-// ---------- STATISTIQUES ----------
+// ---------- DONNÉES PARTAGÉES ----------
+
+let allBooksCache = [];
+let allEventsCache = [];
+let allOrdersCache = [];
+
+async function fetchAllBooks(){
+  const res = await fetch(`${BACKEND_URL}/api/admin/books`, { headers: { 'x-admin-key': adminKey } });
+  allBooksCache = await res.json();
+}
+
+function bookTitle(id){
+  const b = allBooksCache.find(b => b.id === id);
+  return b ? b.title : `Livre #${id}`;
+}
 
 function monthLabel(dateStr){
   const d = new Date(dateStr);
   return d.toLocaleDateString('fr-FR', { year: 'numeric', month: 'long' });
 }
 
+function yearOf(dateStr){ return new Date(dateStr).getFullYear(); }
+function monthOf(dateStr){ return new Date(dateStr).getMonth(); } // 0-11
+
+const MONTH_NAMES = ['Janvier','Février','Mars','Avril','Mai','Juin','Juillet','Août','Septembre','Octobre','Novembre','Décembre'];
+
+function populateFilters(prefix, dates){
+  const years = [...new Set(dates.map(yearOf))].sort((a,b) => b - a);
+  const yearSel = document.getElementById(`${prefix}YearFilter`);
+  yearSel.innerHTML = '<option value="all">Toutes les années</option>' +
+    years.map(y => `<option value="${y}">${y}</option>`).join('');
+
+  const monthSel = document.getElementById(`${prefix}MonthFilter`);
+  monthSel.innerHTML = '<option value="all">Tous les mois</option>' +
+    MONTH_NAMES.map((m, i) => `<option value="${i}">${m}</option>`).join('');
+
+  const bookSel = document.getElementById(`${prefix}BookFilter`);
+  bookSel.innerHTML = '<option value="all">Tous les livres</option>' +
+    allBooksCache.map(b => `<option value="${b.id}">${b.title}</option>`).join('');
+}
+
+// ---------- STATISTIQUES ----------
+
 async function loadStats(){
+  await fetchAllBooks();
   const res = await fetch(`${BACKEND_URL}/api/admin/stats`, { headers: { 'x-admin-key': adminKey } });
-  const events = await res.json();
+  allEventsCache = await res.json();
+  const ordersRes = await fetch(`${BACKEND_URL}/api/admin/orders`, { headers: { 'x-admin-key': adminKey } });
+  allOrdersCache = await ordersRes.json();
 
-  const byMonth = {};
-  events.forEach(e => {
-    const key = monthLabel(e.date);
-    if(!byMonth[key]) byMonth[key] = { visits: 0, clicks: 0 };
-    if(e.type === 'visit') byMonth[key].visits++;
-    if(e.type === 'click') byMonth[key].clicks++;
-  });
-
-  const totalVisits = events.filter(e => e.type === 'visit').length;
-  const totalClicks = events.filter(e => e.type === 'click').length;
+  const totalVisits = allEventsCache.filter(e => e.type === 'visit').length;
+  const totalClicks = allEventsCache.filter(e => e.type === 'click').length;
+  const totalOrders = allOrdersCache.length;
 
   document.getElementById('statsSummary').innerHTML = `
-    <p><span class="stat-total">${totalVisits}</span> visites au total &nbsp;·&nbsp; <span class="stat-total">${totalClicks}</span> clics au total</p>
+    <p>
+      <span class="stat-total">${totalVisits}</span> visites &nbsp;·&nbsp;
+      <span class="stat-total">${totalClicks}</span> ajouts au panier &nbsp;·&nbsp;
+      <span class="stat-total">${totalOrders}</span> commandes
+    </p>
   `;
 
-  const tbody = document.querySelector('#statsTable tbody');
-  const rows = Object.entries(byMonth).sort((a,b) => b[0].localeCompare(a[0]));
-  tbody.innerHTML = rows.length === 0
-    ? '<tr><td colspan="3" class="hint">Aucune donnée pour le moment.</td></tr>'
-    : rows.map(([month, d]) => `<tr><td>${month}</td><td>${d.visits}</td><td>${d.clicks}</td></tr>`).join('');
+  populateFilters('stats', [...allEventsCache.map(e => e.date), ...allOrdersCache.map(o => o.date)]);
+  renderStatsDetail();
+}
+
+function renderStatsDetail(){
+  const year = document.getElementById('statsYearFilter').value;
+  const month = document.getElementById('statsMonthFilter').value;
+  const bookFilter = document.getElementById('statsBookFilter').value;
+
+  const matches = (dateStr) =>
+    (year === 'all' || yearOf(dateStr) === parseInt(year, 10)) &&
+    (month === 'all' || monthOf(dateStr) === parseInt(month, 10));
+
+  const clicksByBook = {};
+  allEventsCache.filter(e => e.type === 'click' && e.bookId && matches(e.date)).forEach(e => {
+    clicksByBook[e.bookId] = (clicksByBook[e.bookId] || 0) + 1;
+  });
+
+  const ordersByBook = {};
+  allOrdersCache.filter(o => matches(o.date)).forEach(o => {
+    (o.items || []).forEach(item => {
+      ordersByBook[item.id] = (ordersByBook[item.id] || 0) + 1;
+    });
+  });
+
+  let bookIds = [...new Set([...Object.keys(clicksByBook), ...Object.keys(ordersByBook)].map(Number))];
+  if(bookFilter !== 'all') bookIds = bookIds.filter(id => id === parseInt(bookFilter, 10));
+
+  const tbody = document.querySelector('#statsDetailTable tbody');
+  if(bookIds.length === 0){
+    tbody.innerHTML = '<tr><td colspan="3" class="hint">Aucune donnée pour cette sélection.</td></tr>';
+    return;
+  }
+  tbody.innerHTML = bookIds
+    .sort((a,b) => (ordersByBook[b]||0) - (ordersByBook[a]||0))
+    .map(id => `<tr><td>${bookTitle(id)}</td><td>${clicksByBook[id] || 0}</td><td>${ordersByBook[id] || 0}</td></tr>`)
+    .join('');
 }
 
 // ---------- CHIFFRE D'AFFAIRES ----------
 
 async function loadRevenue(){
+  await fetchAllBooks();
   const res = await fetch(`${BACKEND_URL}/api/admin/orders`, { headers: { 'x-admin-key': adminKey } });
-  const orders = await res.json();
+  allOrdersCache = await res.json();
 
-  const byMonth = {};
-  orders.forEach(o => {
-    const key = monthLabel(o.date);
-    if(!byMonth[key]) byMonth[key] = { count: 0, total: 0 };
-    byMonth[key].count++;
-    byMonth[key].total += o.total;
-  });
-
-  const totalRevenue = orders.reduce((sum, o) => sum + o.total, 0);
-
+  const totalRevenue = allOrdersCache.reduce((sum, o) => sum + o.total, 0);
   document.getElementById('revenueSummary').innerHTML = `
-    <p><span class="stat-total">${totalRevenue.toFixed(2)} €</span> de chiffre d'affaires total (${orders.length} commande(s))</p>
+    <p><span class="stat-total">${totalRevenue.toFixed(2)} €</span> de chiffre d'affaires total (${allOrdersCache.length} commande(s))</p>
   `;
 
-  const tbody = document.querySelector('#revenueTable tbody');
-  const rows = Object.entries(byMonth).sort((a,b) => b[0].localeCompare(a[0]));
-  tbody.innerHTML = rows.length === 0
-    ? '<tr><td colspan="3" class="hint">Aucune commande pour le moment.</td></tr>'
-    : rows.map(([month, d]) => `<tr><td>${month}</td><td>${d.count}</td><td>${d.total.toFixed(2)} €</td></tr>`).join('');
+  renderRevenueChart();
+  populateFilters('revenue', allOrdersCache.map(o => o.date));
+  renderRevenueDetail();
+}
+
+function renderRevenueChart(){
+  const byMonth = {};
+  allOrdersCache.forEach(o => {
+    const key = monthLabel(o.date);
+    byMonth[key] = (byMonth[key] || 0) + o.total;
+  });
+  const entries = Object.entries(byMonth).sort((a,b) => new Date(a[0]) - new Date(b[0]));
+  const chart = document.getElementById('revenueChart');
+
+  if(entries.length === 0){
+    chart.innerHTML = '<p class="hint">Aucune commande pour le moment.</p>';
+    return;
+  }
+
+  const max = Math.max(...entries.map(e => e[1]));
+  chart.innerHTML = entries.map(([label, value]) => `
+    <div class="chart-bar-wrap">
+      <span class="chart-value">${value.toFixed(0)}€</span>
+      <div class="chart-bar" style="height:${max > 0 ? (value/max*100) : 0}%;"></div>
+      <span class="chart-label">${label.replace(' ', '<br>')}</span>
+    </div>
+  `).join('');
+}
+
+function renderRevenueDetail(){
+  const year = document.getElementById('revenueYearFilter').value;
+  const month = document.getElementById('revenueMonthFilter').value;
+  const bookFilter = document.getElementById('revenueBookFilter').value;
+
+  const matches = (dateStr) =>
+    (year === 'all' || yearOf(dateStr) === parseInt(year, 10)) &&
+    (month === 'all' || monthOf(dateStr) === parseInt(month, 10));
+
+  const byBook = {};
+  allOrdersCache.filter(o => matches(o.date)).forEach(o => {
+    (o.items || []).forEach(item => {
+      if(!byBook[item.id]) byBook[item.id] = { qty: 0, revenue: 0 };
+      byBook[item.id].qty++;
+      byBook[item.id].revenue += item.price;
+    });
+  });
+
+  let bookIds = Object.keys(byBook).map(Number);
+  if(bookFilter !== 'all') bookIds = bookIds.filter(id => id === parseInt(bookFilter, 10));
+
+  const tbody = document.querySelector('#revenueDetailTable tbody');
+  if(bookIds.length === 0){
+    tbody.innerHTML = '<tr><td colspan="3" class="hint">Aucune donnée pour cette sélection.</td></tr>';
+    return;
+  }
+  tbody.innerHTML = bookIds
+    .sort((a,b) => byBook[b].revenue - byBook[a].revenue)
+    .map(id => `<tr><td>${bookTitle(id)}</td><td>${byBook[id].qty}</td><td>${byBook[id].revenue.toFixed(2)} €</td></tr>`)
+    .join('');
 }
 
 // ---------- TAGS DU SITE ----------

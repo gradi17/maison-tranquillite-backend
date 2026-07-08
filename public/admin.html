@@ -96,6 +96,7 @@
       <button class="tab-btn" data-tab="revenue" onclick="showTab('revenue')">Chiffre d'affaires</button>
       <button class="tab-btn" data-tab="tags" onclick="showTab('tags')">Tags du site</button>
       <button class="tab-btn" data-tab="theme" onclick="showTab('theme')">Couleurs & thème</button>
+      <button class="tab-btn" data-tab="backup" onclick="showTab('backup')">Sauvegarde</button>
     </div>
 
     <!-- ONGLET LIVRES -->
@@ -135,7 +136,6 @@
       <div class="card">
         <h2>Catalogue actuel</h2>
         <div id="bookList"></div>
-        <button class="secondary" onclick="exportBackup()">Exporter une sauvegarde</button>
       </div>
     </div>
 
@@ -185,6 +185,18 @@
         <div class="color-row"><label>Fond des tags</label><input type="color" id="themeSageLight"></div>
         <button onclick="saveTheme()">Enregistrer les couleurs</button>
         <p class="hint" id="themeSuccess" style="color:var(--sage);display:none;">Couleurs enregistrées !</p>
+      </div>
+    </div>
+    <!-- ONGLET SAUVEGARDE -->
+    <div class="tab-panel" id="tab-backup">
+      <div class="card">
+        <h2>Sauvegarde du catalogue</h2>
+        <p class="hint">
+          Ceci télécharge un fichier contenant tous vos livres (titres, prix, tags, catégories...)
+          — pas les fichiers PDF ni les images, juste les informations. Utile avant qu'on modifie
+          à nouveau le code du site, pour pouvoir tout remettre en place si besoin.
+        </p>
+        <button onclick="exportBackup()">Exporter une sauvegarde</button>
       </div>
     </div>
   </div>

@@ -1,0 +1,656 @@
+// Serveur — La maison de la tranquillité
+//
+// Ce serveur fait 3 choses :
+// 1. Gère le catalogue de livres (stocké dans books.json) et l'expose
+//    via /api/books pour que la boutique l'affiche toujours à jour.
+// 2. Fournit un panneau d'administration (/admin) protégé par un mot de
+//    passe, pour ajouter/modifier/supprimer un livre sans jamais toucher
+//    à GitHub ni Netlify.
+// 3. Gère le paiement (Stripe : carte, Apple Pay, PayPal...) et l'envoi
+//    automatique de l'email de livraison avec le PDF en pièce jointe.
+//
+// IMPORTANT — sauvegardes : books.json et les PDF vivent sur le disque
+// du serveur Render. Ils survivent aux redémarrages normaux, mais un
+// futur déploiement de code depuis GitHub réinitialise ce disque.
+// Utilisez le bouton "Exporter une sauvegarde" du panneau admin de temps
+// en temps, et prévenez-moi avant qu'on redéploie du code à l'avenir.
+
+require('dotenv').config();
+const express = require('express');
+const cors = require('cors');
+const Stripe = require('stripe');
+const fs = require('fs');
+const path = require('path');
+const multer = require('multer');
+const AdmZip = require('adm-zip');
+
+const stripe = Stripe(process.env.STRIPE_SECRET_KEY);
+const app = express();
+const upload = multer({ dest: path.join(__dirname, 'uploads-tmp') });
+
+const BOOKS_FILE = path.join(__dirname, 'books.json');
+const EVENTS_FILE = path.join(__dirname, 'events.json');   // visites & clics
+const ORDERS_FILE = path.join(__dirname, 'orders.json');   // commandes payées
+const TAGS_FILE = path.join(__dirname, 'tags.json');       // tags suggérés
+const THEME_FILE = path.join(__dirname, 'theme.json');     // couleurs du site
+const FILES_DIR = path.join(__dirname, 'files');       // PDF — jamais servis publiquement
+const IMAGES_DIR = path.join(__dirname, 'images');     // couvertures/aperçus — servis publiquement
+if (!fs.existsSync(FILES_DIR)) fs.mkdirSync(FILES_DIR);
+if (!fs.existsSync(IMAGES_DIR)) fs.mkdirSync(IMAGES_DIR);
+
+function readJsonFile(file, fallback) {
+  if (!fs.existsSync(file)) {
+    fs.writeFileSync(file, JSON.stringify(fallback, null, 2));
+  }
+  return JSON.parse(fs.readFileSync(file, 'utf-8'));
+}
+function writeJsonFile(file, data) {
+  fs.writeFileSync(file, JSON.stringify(data, null, 2));
+}
+
+const DEFAULT_THEME = {
+  sky: "#DEEEF6", surface: "#FFFFFF", ink: "#3A4750", inkSoft: "#6B7B84",
+  accent: "#C98B67", accentDark: "#A96F4E", sage: "#6E9280", sageLight: "#E2ECE5",
+};
+
+function fileExtension(originalName) {
+  const ext = path.extname(originalName).toLowerCase();
+  return ext || '.jpg';
+}
+
+// Catalogue de départ, pour ne rien perdre de ce qu'on a déjà construit.
+// Ce fichier ne sera utilisé que si books.json n'existe pas encore.
+const SEED_BOOKS = [
+  { id: 1, title: "Les Ombres de Verre", author: "L. Faucher", category: "Fantastique", price: 6.90, color: "#8FA9B8", tags: ["noir et blanc", "magie", "one-shot"], mature: false, file: null, cover: null, previews: [] },
+  { id: 2, title: "Rouille & Néon", author: "K. Adamo", category: "Science-fiction", price: 7.50, color: "#7C97A3", tags: ["cyberpunk", "couleur", "tome 1"], mature: false, file: null, cover: null, previews: [] },
+  { id: 3, title: "Le Cirque Muet", author: "P. Rennes", category: "Drame", price: 5.90, color: "#A3937E", tags: ["noir et blanc", "one-shot", "adulte"], mature: false, file: null, cover: null, previews: [] },
+  { id: 4, title: "Chasseurs d'Orage", author: "M. Ilva", category: "Aventure", price: 8.20, color: "#7FA68F", tags: ["couleur", "young adult", "tome 1"], mature: false, file: null, cover: null, previews: [] },
+  { id: 5, title: "Pixel Requiem", author: "S. Doko", category: "Science-fiction", price: 6.50, color: "#8FA9B8", tags: ["cyberpunk", "post-apocalyptique", "couleur"], mature: false, file: null, cover: null, previews: [] },
+  { id: 6, title: "La Dernière Marée", author: "A. Costa", category: "Drame", price: 5.50, color: "#A3937E", tags: ["noir et blanc", "adulte", "one-shot"], mature: false, file: null, cover: null, previews: [] },
+  { id: 7, title: "Griffes d'Encre", author: "J. Brahn", category: "Fantastique", price: 7.90, color: "#9C8FA6", tags: ["magie", "couleur", "young adult"], mature: false, file: null, cover: null, previews: [] },
+  { id: 8, title: "Radio Silence", author: "T. Onwe", category: "Aventure", price: 6.90, color: "#7FA68F", tags: ["post-apocalyptique", "noir et blanc", "tome 1"], mature: false, file: null, cover: null, previews: [] },
+  { id: 9, title: "Sous le Métro Gris", author: "F. Lemn", category: "Drame", price: 5.90, color: "#7C97A3", tags: ["adulte", "couleur", "one-shot"], mature: false, file: null, cover: null, previews: [] },
+  { id: 10, title: "L'entraînement de la nuit", author: "Kotaro", category: "Aventure", price: 6.50, color: "#A98CA0", tags: ["sexe", "adulte", "hentai", "amour", "bonheur", "manga", "aventure", "numberone", "decouverte", "bd erotique"], mature: true, file: "entrainement-de-la-nuit.pdf", cover: null, previews: [] },
+];
+
+function loadBooks() {
+  if (!fs.existsSync(BOOKS_FILE)) {
+    fs.writeFileSync(BOOKS_FILE, JSON.stringify(SEED_BOOKS, null, 2));
+  }
+  return JSON.parse(fs.readFileSync(BOOKS_FILE, 'utf-8'));
+}
+
+function saveBooks(books) {
+  fs.writeFileSync(BOOKS_FILE, JSON.stringify(books, null, 2));
+}
+
+function slugify(text) {
+  return text
+    .toLowerCase()
+    .normalize('NFD').replace(/[\u0300-\u036f]/g, '') // enlève les accents
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/(^-|-$)/g, '');
+}
+
+// Vérifie le mot de passe admin, envoyé dans l'en-tête "x-admin-key".
+function requireAdmin(req, res, next) {
+  const key = req.headers['x-admin-key'];
+  if (!key || key !== process.env.ADMIN_KEY) {
+    return res.status(401).json({ error: 'Mot de passe admin invalide.' });
+  }
+  next();
+}
+
+app.use(cors());
+
+// Le webhook Stripe a besoin du corps brut de la requête (pas du JSON
+// parsé) pour vérifier la signature — on le déclare donc AVANT
+// express.json(), avec son propre middleware.
+app.post('/webhook/stripe', express.raw({ type: 'application/json' }), async (req, res) => {
+  let event;
+
+  try {
+    event = stripe.webhooks.constructEvent(
+      req.body,
+      req.headers['stripe-signature'],
+      process.env.STRIPE_WEBHOOK_SECRET
+    );
+  } catch (err) {
+    console.error('Signature webhook invalide:', err.message);
+    return res.status(400).send(`Webhook Error: ${err.message}`);
+  }
+
+  if (event.type === 'checkout.session.completed') {
+    const session = event.data.object;
+    const email = session.customer_details && session.customer_details.email;
+
+    try {
+      const itemIds = (session.metadata && session.metadata.itemIds)
+        ? session.metadata.itemIds.split(',')
+        : [];
+
+      const books = loadBooks();
+      const products = itemIds.map(id => books.find(b => b.id === parseInt(id, 10))).filter(Boolean);
+      const total = products.reduce((sum, p) => sum + p.price, 0);
+      const items = products.map(p => ({ id: p.id, title: p.title, price: p.price }));
+
+      const orders = readJsonFile(ORDERS_FILE, []);
+      orders.push({ date: new Date().toISOString(), total, items });
+      writeJsonFile(ORDERS_FILE, orders);
+
+      await sendDownloadEmail(email, itemIds);
+      console.log(`Paiement confirmé pour ${email}, email de livraison envoyé.`);
+    } catch (err) {
+      console.error('Erreur lors de la livraison après paiement:', err);
+    }
+  }
+
+  res.json({ received: true });
+});
+
+app.use(express.json());
+app.use(express.static(path.join(__dirname, 'public')));
+app.use('/images', express.static(IMAGES_DIR));
+
+app.get('/admin', (req, res) => {
+  res.sendFile(path.join(__dirname, 'public', 'admin.html'));
+});
+
+app.get('/robots.txt', (req, res) => {
+  res.type('text/plain').send(
+    'User-agent: *\nDisallow: /admin\nDisallow: /api/admin\n\nSitemap: https://lamaisondelatranquillite.com/sitemap.xml'
+  );
+});
+
+app.get('/sitemap.xml', (req, res) => {
+  const books = loadBooks();
+  const urls = [
+    'https://lamaisondelatranquillite.com/',
+    ...books.map(b => `https://lamaisondelatranquillite.com/livre/${b.id}-${slugify(b.title)}`),
+  ];
+  const xml = `<?xml version="1.0" encoding="UTF-8"?>
+<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
+${urls.map(u => `  <url><loc>${u}</loc></url>`).join('\n')}
+</urlset>`;
+  res.type('application/xml').send(xml);
+});
+
+// Page produit individuelle — une vraie URL par livre, lisible par Google,
+// avec ses propres balises meta et son propre bouton d'achat fonctionnel.
+// Cette route est appelée via Netlify (voir _redirects) sous l'adresse
+// principale du site, pas directement sous onrender.com.
+app.get('/livre/:slug', (req, res) => {
+  const id = parseInt(req.params.slug.split('-')[0], 10);
+  const books = loadBooks();
+  const book = books.find(b => b.id === id);
+
+  if (!book) {
+    return res.status(404).send('<h1>Livre introuvable</h1>');
+  }
+
+  const coverUrl = book.cover ? `https://maison-tranquillite-backend.onrender.com/images/${book.cover}` : null;
+  const description = `${book.title}, par ${book.author || 'auteur inconnu'}. ${book.category}. Tags : ${book.tags.join(', ')}.`;
+  const canonical = `https://lamaisondelatranquillite.com/livre/${book.id}-${slugify(book.title)}`;
+
+  res.send(`<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8">
+<title>${book.title} — La maison de la tranquillité</title>
+<meta name="description" content="${description.replace(/"/g, '&quot;')}">
+<link rel="canonical" href="${canonical}">
+<meta property="og:title" content="${book.title}">
+<meta property="og:description" content="${description.replace(/"/g, '&quot;')}">
+<meta property="og:type" content="product">
+${coverUrl ? `<meta property="og:image" content="${coverUrl}">` : ''}
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500&family=Work+Sans:wght@400;600;700&display=swap" rel="stylesheet">
+<script type="application/ld+json">
+${JSON.stringify({
+  "@context": "https://schema.org/",
+  "@type": "Product",
+  "name": book.title,
+  "author": book.author,
+  "image": coverUrl || undefined,
+  "description": description,
+  "offers": {
+    "@type": "Offer",
+    "priceCurrency": "EUR",
+    "price": book.price,
+    "availability": "https://schema.org/InStock",
+  },
+})}
+</script>
+<style>
+  body{margin:0;background:#DEEEF6;color:#3A4750;font-family:'Work Sans',sans-serif;padding:32px 20px;}
+  .wrap{max-width:600px;margin:0 auto;background:white;border-radius:20px;padding:32px;text-align:center;}
+  img{width:220px;aspect-ratio:324/432;object-fit:cover;border-radius:14px;}
+  h1{font-family:'Fraunces',serif;font-weight:500;font-size:26px;margin:20px 0 6px;}
+  p.author{color:#6B7B84;margin:0 0 16px;}
+  p.price{font-family:'Fraunces',serif;font-size:22px;color:#A96F4E;margin:0 0 20px;}
+  .tag{display:inline-block;background:#E2ECE5;color:#6E9280;font-size:12px;font-weight:600;padding:4px 10px;border-radius:999px;margin:2px;}
+  button{background:#C98B67;color:white;border:none;border-radius:10px;padding:14px 28px;font-weight:700;font-size:15px;cursor:pointer;margin-top:20px;}
+  a.back{display:block;margin-top:20px;color:#6B7B84;font-size:13px;}
+</style>
+</head>
+<body>
+  <div class="wrap">
+    ${coverUrl ? `<img src="${coverUrl}" alt="${book.title}">` : ''}
+    <h1>${book.title}</h1>
+    <p class="author">${book.author || ''} · ${book.category}</p>
+    <p class="price">${book.price.toFixed(2)} €</p>
+    <div>${book.tags.map(t => `<span class="tag">#${t}</span>`).join('')}</div>
+    <button onclick="buyNow()">Acheter maintenant</button>
+    <a class="back" href="/">← Retour à la boutique</a>
+  </div>
+  <script>
+    async function buyNow(){
+      const res = await fetch('https://maison-tranquillite-backend.onrender.com/api/checkout', {
+        method: 'POST',
+        headers: {'Content-Type':'application/json'},
+        body: JSON.stringify({ itemIds: [${book.id}] })
+      });
+      const data = await res.json();
+      if(data.url) window.location.href = data.url;
+    }
+  </script>
+</body>
+</html>`);
+});
+
+// ---------------------------------------------------------------------
+// API PUBLIQUE — utilisée par la boutique pour afficher le catalogue
+// ---------------------------------------------------------------------
+
+app.get('/api/books', (req, res) => {
+  const books = loadBooks().map(({ file, ...rest }) => rest); // ne jamais exposer le nom de fichier au public
+  res.json(books);
+});
+
+app.get('/api/theme', (req, res) => {
+  res.json(readJsonFile(THEME_FILE, DEFAULT_THEME));
+});
+
+// Suivi léger des visites et clics — sans aucune donnée personnelle,
+// juste un compteur horodaté par type d'événement.
+app.post('/api/track', (req, res) => {
+  const { type, bookId } = req.body || {};
+  if (!['visit', 'click'].includes(type)) return res.status(400).json({ error: 'Type invalide.' });
+
+  const events = readJsonFile(EVENTS_FILE, []);
+  events.push({ type, bookId: bookId || null, date: new Date().toISOString() });
+  writeJsonFile(EVENTS_FILE, events);
+  res.json({ ok: true });
+});
+
+// ---------------------------------------------------------------------
+// API ADMIN — protégée par mot de passe, utilisée par /admin
+// ---------------------------------------------------------------------
+
+app.get('/api/admin/books', requireAdmin, (req, res) => {
+  res.json(loadBooks());
+});
+
+const bookUpload = upload.fields([
+  { name: 'pdf', maxCount: 1 },
+  { name: 'cover', maxCount: 1 },
+  { name: 'previews', maxCount: 6 },
+]);
+
+app.post('/api/admin/books', requireAdmin, bookUpload, (req, res) => {
+  const books = loadBooks();
+  const { title, author, category, price, tags, mature, color } = req.body;
+
+  if (!title || !price) {
+    return res.status(400).json({ error: 'Titre et prix sont obligatoires.' });
+  }
+
+  const newId = books.length > 0 ? Math.max(...books.map(b => b.id)) + 1 : 1;
+  const files = req.files || {};
+
+  let fileName = null;
+  if (files.pdf && files.pdf[0]) {
+    fileName = `${newId}-${slugify(title)}.pdf`;
+    fs.renameSync(files.pdf[0].path, path.join(FILES_DIR, fileName));
+  }
+
+  let coverName = null;
+  if (files.cover && files.cover[0]) {
+    coverName = `${newId}-cover${fileExtension(files.cover[0].originalname)}`;
+    fs.renameSync(files.cover[0].path, path.join(IMAGES_DIR, coverName));
+  }
+
+  const previewNames = (files.previews || []).map((f, i) => {
+    const name = `${newId}-preview-${i + 1}${fileExtension(f.originalname)}`;
+    fs.renameSync(f.path, path.join(IMAGES_DIR, name));
+    return name;
+  });
+
+  const newBook = {
+    id: newId,
+    title,
+    author: author || '',
+    category: category || 'Autre',
+    price: parseFloat(price),
+    color: color || '#8FA9B8',
+    tags: tags ? tags.split(',').map(t => t.trim()).filter(Boolean) : [],
+    mature: mature === 'true' || mature === true,
+    file: fileName,
+    cover: coverName,
+    previews: previewNames,
+  };
+
+  books.push(newBook);
+  saveBooks(books);
+  res.json(newBook);
+});
+
+app.put('/api/admin/books/:id', requireAdmin, bookUpload, (req, res) => {
+  const books = loadBooks();
+  const id = parseInt(req.params.id, 10);
+  const book = books.find(b => b.id === id);
+
+  if (!book) return res.status(404).json({ error: 'Livre introuvable.' });
+
+  const { title, author, category, price, tags, mature, color } = req.body;
+  if (title) book.title = title;
+  if (author !== undefined) book.author = author;
+  if (category) book.category = category;
+  if (price) book.price = parseFloat(price);
+  if (color) book.color = color;
+  if (tags !== undefined) book.tags = tags.split(',').map(t => t.trim()).filter(Boolean);
+  if (mature !== undefined) book.mature = mature === 'true' || mature === true;
+
+  const files = req.files || {};
+
+  if (files.pdf && files.pdf[0]) {
+    const fileName = `${id}-${slugify(book.title)}.pdf`;
+    fs.renameSync(files.pdf[0].path, path.join(FILES_DIR, fileName));
+    book.file = fileName;
+  }
+
+  if (files.cover && files.cover[0]) {
+    if (book.cover) {
+      const oldPath = path.join(IMAGES_DIR, book.cover);
+      if (fs.existsSync(oldPath)) fs.unlinkSync(oldPath);
+    }
+    const coverName = `${id}-cover${fileExtension(files.cover[0].originalname)}`;
+    fs.renameSync(files.cover[0].path, path.join(IMAGES_DIR, coverName));
+    book.cover = coverName;
+  }
+
+  if (files.previews && files.previews.length > 0) {
+    (book.previews || []).forEach((p) => {
+      const oldPath = path.join(IMAGES_DIR, p);
+      if (fs.existsSync(oldPath)) fs.unlinkSync(oldPath);
+    });
+    book.previews = files.previews.map((f, i) => {
+      const name = `${id}-preview-${i + 1}${fileExtension(f.originalname)}`;
+      fs.renameSync(f.path, path.join(IMAGES_DIR, name));
+      return name;
+    });
+  }
+
+  saveBooks(books);
+  res.json(book);
+});
+
+app.delete('/api/admin/books/:id', requireAdmin, (req, res) => {
+  const books = loadBooks();
+  const id = parseInt(req.params.id, 10);
+  const book = books.find(b => b.id === id);
+
+  if (book) {
+    if (book.file) {
+      const filePath = path.join(FILES_DIR, book.file);
+      if (fs.existsSync(filePath)) fs.unlinkSync(filePath);
+    }
+    if (book.cover) {
+      const coverPath = path.join(IMAGES_DIR, book.cover);
+      if (fs.existsSync(coverPath)) fs.unlinkSync(coverPath);
+    }
+    (book.previews || []).forEach((p) => {
+      const previewPath = path.join(IMAGES_DIR, p);
+      if (fs.existsSync(previewPath)) fs.unlinkSync(previewPath);
+    });
+  }
+
+  const filtered = books.filter(b => b.id !== id);
+  saveBooks(filtered);
+  res.json({ deleted: id });
+});
+
+// Sauvegarde téléchargeable du catalogue complet (sans les PDF).
+app.get('/api/admin/export', requireAdmin, (req, res) => {
+  res.setHeader('Content-Disposition', 'attachment; filename="books-backup.json"');
+  res.json(loadBooks());
+});
+
+// Restaure un catalogue depuis un fichier de sauvegarde exporté plus tôt.
+// Remplace entièrement le catalogue actuel. Ne restaure PAS les PDF/images
+// (ils ne sont jamais inclus dans la sauvegarde) — il faudra les remettre
+// à jour livre par livre après un import si nécessaire.
+app.post('/api/admin/import', requireAdmin, (req, res) => {
+  const incoming = req.body;
+  if (!Array.isArray(incoming)) {
+    return res.status(400).json({ error: 'Le fichier ne contient pas une liste de livres valide.' });
+  }
+  saveBooks(incoming);
+  res.json({ imported: incoming.length });
+});
+
+// Sauvegarde COMPLÈTE : books.json + tous les PDF + toutes les images,
+// dans un seul fichier .zip téléchargeable.
+app.get('/api/admin/export-full', requireAdmin, (req, res) => {
+  const zip = new AdmZip();
+  zip.addLocalFile(BOOKS_FILE, '', 'books.json');
+  if (fs.existsSync(FILES_DIR)) zip.addLocalFolder(FILES_DIR, 'files');
+  if (fs.existsSync(IMAGES_DIR)) zip.addLocalFolder(IMAGES_DIR, 'images');
+
+  const buffer = zip.toBuffer();
+  res.setHeader('Content-Type', 'application/zip');
+  res.setHeader('Content-Disposition', 'attachment; filename="sauvegarde-complete.zip"');
+  res.send(buffer);
+});
+
+// Restauration COMPLÈTE à partir d'un .zip généré par /export-full.
+// Remplace entièrement le catalogue, les PDF et les images actuels.
+app.post('/api/admin/import-full', requireAdmin, upload.single('backup'), (req, res) => {
+  if (!req.file) return res.status(400).json({ error: 'Aucun fichier reçu.' });
+
+  try {
+    const zip = new AdmZip(req.file.path);
+    const extractDir = path.join(__dirname, 'restore-tmp');
+    if (fs.existsSync(extractDir)) fs.rmSync(extractDir, { recursive: true });
+    zip.extractAllTo(extractDir, true);
+
+    const restoredBooksFile = path.join(extractDir, 'books.json');
+    if (!fs.existsSync(restoredBooksFile)) {
+      throw new Error('Le fichier ne contient pas de books.json — ce n\'est pas une sauvegarde valide.');
+    }
+
+    // Vide les dossiers actuels avant de restaurer.
+    if (fs.existsSync(FILES_DIR)) fs.rmSync(FILES_DIR, { recursive: true });
+    if (fs.existsSync(IMAGES_DIR)) fs.rmSync(IMAGES_DIR, { recursive: true });
+    fs.mkdirSync(FILES_DIR);
+    fs.mkdirSync(IMAGES_DIR);
+
+    fs.copyFileSync(restoredBooksFile, BOOKS_FILE);
+
+    const restoredFilesDir = path.join(extractDir, 'files');
+    if (fs.existsSync(restoredFilesDir)) {
+      fs.readdirSync(restoredFilesDir).forEach(f => {
+        fs.copyFileSync(path.join(restoredFilesDir, f), path.join(FILES_DIR, f));
+      });
+    }
+
+    const restoredImagesDir = path.join(extractDir, 'images');
+    if (fs.existsSync(restoredImagesDir)) {
+      fs.readdirSync(restoredImagesDir).forEach(f => {
+        fs.copyFileSync(path.join(restoredImagesDir, f), path.join(IMAGES_DIR, f));
+      });
+    }
+
+    fs.rmSync(extractDir, { recursive: true });
+    fs.unlinkSync(req.file.path);
+
+    const restoredBooks = JSON.parse(fs.readFileSync(BOOKS_FILE, 'utf-8'));
+    res.json({ imported: restoredBooks.length, full: true });
+  } catch (err) {
+    console.error('Erreur restauration complète:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Statistiques brutes (visites/clics) — le panneau admin fait le tri par mois/année.
+app.get('/api/admin/stats', requireAdmin, (req, res) => {
+  res.json(readJsonFile(EVENTS_FILE, []));
+});
+
+// Commandes payées — le panneau admin calcule le chiffre d'affaires dessus.
+app.get('/api/admin/orders', requireAdmin, (req, res) => {
+  res.json(readJsonFile(ORDERS_FILE, []));
+});
+
+// Tags suggérés, pour vous aider à rester cohérent d'un livre à l'autre.
+app.get('/api/admin/tags', requireAdmin, (req, res) => {
+  res.json(readJsonFile(TAGS_FILE, []));
+});
+
+app.post('/api/admin/tags', requireAdmin, (req, res) => {
+  const { tag } = req.body;
+  if (!tag) return res.status(400).json({ error: 'Tag manquant.' });
+  const tags = readJsonFile(TAGS_FILE, []);
+  const clean = tag.trim().toLowerCase();
+  if (!tags.includes(clean)) tags.push(clean);
+  writeJsonFile(TAGS_FILE, tags);
+  res.json(tags);
+});
+
+app.delete('/api/admin/tags/:tag', requireAdmin, (req, res) => {
+  const tags = readJsonFile(TAGS_FILE, []).filter(t => t !== req.params.tag);
+  writeJsonFile(TAGS_FILE, tags);
+  res.json(tags);
+});
+
+// Thème (couleurs du site).
+app.put('/api/admin/theme', requireAdmin, (req, res) => {
+  const current = readJsonFile(THEME_FILE, DEFAULT_THEME);
+  const updated = { ...current, ...req.body };
+  writeJsonFile(THEME_FILE, updated);
+  res.json(updated);
+});
+
+// ---------------------------------------------------------------------
+// PAIEMENT
+// ---------------------------------------------------------------------
+
+app.post('/api/checkout', async (req, res) => {
+  try {
+    const { itemIds } = req.body;
+
+    if (!Array.isArray(itemIds) || itemIds.length === 0) {
+      return res.status(400).json({ error: 'Panier vide ou invalide.' });
+    }
+
+    const books = loadBooks();
+
+    const line_items = itemIds.map((id) => {
+      const product = books.find(b => b.id === parseInt(id, 10));
+      if (!product) throw new Error(`Produit inconnu: ${id}`);
+      return {
+        price_data: {
+          currency: 'eur',
+          product_data: { name: product.title },
+          unit_amount: Math.round(product.price * 100),
+        },
+        quantity: 1,
+      };
+    });
+
+    const session = await stripe.checkout.sessions.create({
+      mode: 'payment',
+      // On ne précise volontairement aucun "payment_method_types" ici :
+      // les Checkout Sessions Stripe affichent automatiquement, tout
+      // seules, tous les moyens de paiement que vous avez activés et
+      // rendus éligibles dans votre Dashboard (carte, Apple Pay, PayPal,
+      // Klarna, Scalapay...).
+      line_items,
+      success_url: `${process.env.FRONTEND_URL}/?paid=true`,
+      cancel_url: `${process.env.FRONTEND_URL}/panier`,
+      billing_address_collection: 'auto',
+      metadata: { itemIds: itemIds.join(',') },
+    });
+
+    res.json({ url: session.url });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Envoie l'email de livraison avec les PDF en pièce jointe, via Resend.
+async function sendDownloadEmail(email, itemIds) {
+  if (!email) {
+    console.warn('Aucun email trouvé sur la session, impossible de livrer.');
+    return;
+  }
+
+  const books = loadBooks();
+  const products = itemIds
+    .map((id) => books.find(b => b.id === parseInt(id, 10)))
+    .filter(Boolean);
+
+  const attachments = [];
+  const itemsListHtml = [];
+
+  for (const product of products) {
+    if (product.file) {
+      const filePath = path.join(FILES_DIR, product.file);
+      try {
+        const fileBuffer = fs.readFileSync(filePath);
+        attachments.push({
+          filename: product.file,
+          content: fileBuffer.toString('base64'),
+        });
+        itemsListHtml.push(`<li>${product.title} — en pièce jointe à cet email</li>`);
+      } catch (err) {
+        console.error(`Fichier introuvable pour ${product.title}:`, err.message);
+        itemsListHtml.push(`<li>${product.title} — indisponible pour le moment, contactez-nous</li>`);
+      }
+    } else {
+      itemsListHtml.push(`<li>${product.title} — fichier bientôt disponible, nous vous recontactons</li>`);
+    }
+  }
+
+  const response = await fetch('https://api.resend.com/emails', {
+    method: 'POST',
+    headers: {
+      'Authorization': `Bearer ${process.env.RESEND_API_KEY}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      from: 'La maison de la tranquillité <commandes@lamaisondelatranquillite.com>',
+      to: email,
+      subject: 'Vos BD numériques sont prêtes',
+      html: `
+        <p>Merci pour votre commande !</p>
+        <p>Voici le détail :</p>
+        <ul>${itemsListHtml.join('')}</ul>
+        <p>Bonne lecture,<br>La maison de la tranquillité</p>
+      `,
+      attachments,
+    }),
+  });
+
+  if (!response.ok) {
+    const errorText = await response.text();
+    console.error('Erreur Resend:', errorText);
+    throw new Error('Échec de l\'envoi de l\'email de livraison.');
+  }
+
+  console.log(`Email de livraison envoyé à ${email} (${attachments.length} pièce(s) jointe(s)).`);
+}
+
+const PORT = process.env.PORT || 4000;
+app.listen(PORT, () => console.log(`Serveur lancé sur le port ${PORT}`));

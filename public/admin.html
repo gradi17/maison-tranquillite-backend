@@ -42,11 +42,30 @@
     display:flex;flex-direction:column;gap:8px;padding:14px;
     border:1px solid var(--sky);border-radius:12px;
   }
-  .book-row img{width:100%;aspect-ratio:324/432;object-fit:cover;border-radius:8px;}
+  .book-row img{width:100%;aspect-ratio:324/432;object-fit:cover;border-radius:8px;cursor:zoom-in;}
   .book-row .info strong{display:block;font-size:14px;}
   .book-row .info span{display:block;font-size:12px;color:var(--ink-soft);margin-top:4px;}
   .book-row .actions{display:flex;gap:8px;margin-top:4px;}
   .book-row .actions button{flex:1;}
+
+  .lightbox-overlay{
+    position:fixed;inset:0;background:rgba(20,24,27,0.9);z-index:400;
+    display:none;align-items:center;justify-content:center;padding:24px;
+  }
+  .lightbox-overlay.open{display:flex;}
+  .lightbox-overlay img{max-width:90vw;max-height:90vh;border-radius:12px;object-fit:contain;}
+  .lightbox-close{
+    position:fixed;top:20px;right:24px;background:none;border:none;
+    color:white;font-size:28px;cursor:pointer;z-index:401;
+  }
+  .lightbox-arrow{
+    position:fixed;top:50%;transform:translateY(-50%);background:rgba(255,255,255,0.15);
+    border:none;color:white;font-size:24px;cursor:pointer;z-index:401;
+    width:48px;height:48px;border-radius:999px;display:flex;align-items:center;justify-content:center;
+  }
+  .lightbox-arrow:hover{background:rgba(255,255,255,0.3);}
+  .lightbox-prev{left:16px;}
+  .lightbox-next{right:16px;}
   .mature-tag{background:var(--ink);color:white;font-size:10px;padding:2px 6px;border-radius:4px;margin-left:6px;}
   .no-file{color:var(--danger);font-size:11px;}
   #loginScreen{display:block;}
@@ -287,6 +306,13 @@
   </div>
 </div>
 
+<div class="lightbox-overlay" id="lightboxOverlay" onclick="closeLightbox()">
+  <button class="lightbox-close" onclick="closeLightbox()">✕</button>
+  <button class="lightbox-arrow lightbox-prev" id="lightboxPrev" onclick="lightboxPrev(event)">‹</button>
+  <img id="lightboxImg" src="" alt="Aperçu agrandi">
+  <button class="lightbox-arrow lightbox-next" id="lightboxNext" onclick="lightboxNext(event)">›</button>
+</div>
+
 <script>
 const BACKEND_URL = window.location.origin;
 let adminKey = '';
@@ -361,7 +387,7 @@ async function loadBookList(){
   }
   list.innerHTML = books.map(b => `
     <div class="book-row">
-      ${b.cover ? `<img src="${BACKEND_URL}/images/${b.cover}">` : ''}
+      ${b.cover ? `<img src="${BACKEND_URL}/images/${b.cover}" onclick="openBookLightbox(${b.id})">` : ''}
       <div class="info">
         <strong>${b.title} ${b.mature ? '<span class="mature-tag">+18</span>' : ''}</strong>
         <span>${b.author || 'Auteur inconnu'} · ${b.category} · ${b.price.toFixed(2)} €</span>
@@ -786,6 +812,54 @@ async function saveTheme(){
   successEl.style.display = 'block';
   setTimeout(() => successEl.style.display = 'none', 2500);
 }
+
+// ---------- LIGHTBOX (aperçu agrandi des couvertures/aperçus) ----------
+
+let currentGalleryImages = [];
+let currentGalleryIndex = 0;
+
+function openBookLightbox(id){
+  const b = allBooksCache.find(x => x.id === id);
+  if(!b) return;
+  currentGalleryImages = [
+    ...(b.cover ? [`${BACKEND_URL}/images/${b.cover}`] : []),
+    ...(b.previews || []).map(p => `${BACKEND_URL}/images/${p}`),
+  ];
+  if(currentGalleryImages.length === 0) return;
+  currentGalleryIndex = 0;
+  updateLightboxImage();
+  document.getElementById('lightboxOverlay').classList.add('open');
+}
+
+function updateLightboxImage(){
+  document.getElementById('lightboxImg').src = currentGalleryImages[currentGalleryIndex];
+  const showArrows = currentGalleryImages.length > 1;
+  document.getElementById('lightboxPrev').style.display = showArrows ? 'flex' : 'none';
+  document.getElementById('lightboxNext').style.display = showArrows ? 'flex' : 'none';
+}
+
+function lightboxPrev(event){
+  event.stopPropagation();
+  currentGalleryIndex = (currentGalleryIndex - 1 + currentGalleryImages.length) % currentGalleryImages.length;
+  updateLightboxImage();
+}
+
+function lightboxNext(event){
+  event.stopPropagation();
+  currentGalleryIndex = (currentGalleryIndex + 1) % currentGalleryImages.length;
+  updateLightboxImage();
+}
+
+function closeLightbox(){
+  document.getElementById('lightboxOverlay').classList.remove('open');
+}
+
+document.addEventListener('keydown', (e) => {
+  if(!document.getElementById('lightboxOverlay').classList.contains('open')) return;
+  if(e.key === 'ArrowLeft') lightboxPrev(e);
+  if(e.key === 'ArrowRight') lightboxNext(e);
+  if(e.key === 'Escape') closeLightbox();
+});
 </script>
 </body>
 </html>

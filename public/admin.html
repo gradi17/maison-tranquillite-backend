@@ -35,13 +35,18 @@
   button:hover{background:var(--accent-dark);}
   button.danger{background:var(--danger);}
   button.secondary{background:var(--ink-soft);}
-  .book-row{
-    display:flex;align-items:center;justify-content:space-between;gap:12px;
-    padding:12px 0;border-bottom:1px solid var(--sky);
+  #bookList{
+    display:grid;grid-template-columns:repeat(auto-fill, minmax(180px, 1fr));gap:16px;
   }
-  .book-row .info{flex:1;}
+  .book-row{
+    display:flex;flex-direction:column;gap:8px;padding:14px;
+    border:1px solid var(--sky);border-radius:12px;
+  }
+  .book-row img{width:100%;aspect-ratio:324/432;object-fit:cover;border-radius:8px;}
   .book-row .info strong{display:block;font-size:14px;}
-  .book-row .info span{font-size:12px;color:var(--ink-soft);}
+  .book-row .info span{display:block;font-size:12px;color:var(--ink-soft);margin-top:4px;}
+  .book-row .actions{display:flex;gap:8px;margin-top:4px;}
+  .book-row .actions button{flex:1;}
   .mature-tag{background:var(--ink);color:white;font-size:10px;padding:2px 6px;border-radius:4px;margin-left:6px;}
   .no-file{color:var(--danger);font-size:11px;}
   #loginScreen{display:block;}
@@ -119,7 +124,7 @@
     <!-- ONGLET LIVRES -->
     <div class="tab-panel active" id="tab-books">
       <div class="card">
-        <h2>Ajouter un livre</h2>
+        <h2 id="formTitle">Ajouter un livre</h2>
         <label>Titre</label>
         <input type="text" id="newTitle">
         <label>Auteur</label>
@@ -145,7 +150,8 @@
         <label>Images d'aperçu (jusqu'à 6, pour donner envie d'acheter)</label>
         <input type="file" id="newPreviews" accept="image/*" multiple>
         <p class="hint">Même format recommandé : 324 × 432 px.</p>
-        <button onclick="addBook()">Ajouter le livre</button>
+        <button onclick="addBook()" id="submitBookBtn">Ajouter le livre</button>
+        <button class="secondary" onclick="cancelEdit()" id="cancelEditBtn" style="display:none;">Annuler</button>
         <p class="hint" id="addError" style="color:var(--danger);display:none;"></p>
         <p class="hint" id="addSuccess" style="color:var(--sage);display:none;">Livre ajouté !</p>
       </div>
@@ -282,6 +288,38 @@
 <script>
 const BACKEND_URL = window.location.origin;
 let adminKey = '';
+let editingId = null;
+
+function editBook(id){
+  const b = allBooksCache.find(x => x.id === id);
+  if(!b) return;
+
+  editingId = id;
+  document.getElementById('formTitle').textContent = `Modifier "${b.title}"`;
+  document.getElementById('newTitle').value = b.title;
+  document.getElementById('newAuthor').value = b.author || '';
+  document.getElementById('newCategory').value = b.category || '';
+  document.getElementById('newPrice').value = b.price;
+  document.getElementById('newTags').value = (b.tags || []).join(', ');
+  document.getElementById('newColor').value = b.color || '';
+  document.getElementById('newMature').checked = !!b.mature;
+  document.getElementById('submitBookBtn').textContent = 'Enregistrer les modifications';
+  document.getElementById('cancelEditBtn').style.display = 'inline-block';
+  showTab('books');
+  window.scrollTo({ top: 0, behavior: 'smooth' });
+}
+
+function cancelEdit(){
+  editingId = null;
+  document.getElementById('formTitle').textContent = 'Ajouter un livre';
+  ['newTitle','newAuthor','newCategory','newPrice','newTags','newColor'].forEach(id => document.getElementById(id).value = '');
+  document.getElementById('newMature').checked = false;
+  document.getElementById('newFile').value = '';
+  document.getElementById('newCover').value = '';
+  document.getElementById('newPreviews').value = '';
+  document.getElementById('submitBookBtn').textContent = 'Ajouter le livre';
+  document.getElementById('cancelEditBtn').style.display = 'none';
+}
 
 function showTab(tab){
   document.querySelectorAll('.tab-panel').forEach(p => p.classList.remove('active'));
@@ -312,6 +350,7 @@ async function login(){
 async function loadBookList(){
   const res = await fetch(`${BACKEND_URL}/api/admin/books`, { headers: { 'x-admin-key': adminKey } });
   const books = await res.json();
+  allBooksCache = books;
   const list = document.getElementById('bookList');
   if(books.length === 0){
     list.innerHTML = '<p class="hint">Aucun livre pour le moment.</p>';
@@ -319,15 +358,16 @@ async function loadBookList(){
   }
   list.innerHTML = books.map(b => `
     <div class="book-row">
-      ${b.cover ? `<img src="${BACKEND_URL}/images/${b.cover}" style="width:44px;height:58px;object-fit:cover;border-radius:6px;">` : ''}
+      ${b.cover ? `<img src="${BACKEND_URL}/images/${b.cover}">` : ''}
       <div class="info">
         <strong>${b.title} ${b.mature ? '<span class="mature-tag">+18</span>' : ''}</strong>
-        <span>${b.author || 'Auteur inconnu'} · ${b.category} · ${b.price.toFixed(2)} €</span><br>
+        <span>${b.author || 'Auteur inconnu'} · ${b.category} · ${b.price.toFixed(2)} €</span>
         <span>${b.tags.map(t => '#' + t).join(' ')}</span>
-        ${!b.file ? '<br><span class="no-file">Aucun fichier PDF attaché</span>' : ''}
-        ${b.previews && b.previews.length ? `<br><span>${b.previews.length} image(s) d'aperçu</span>` : ''}
+        ${!b.file ? '<span class="no-file">Aucun fichier PDF attaché</span>' : ''}
+        ${b.previews && b.previews.length ? `<span>${b.previews.length} image(s) d'aperçu</span>` : ''}
       </div>
       <div class="actions">
+        <button class="secondary" onclick="editBook(${b.id})">Modifier</button>
         <button class="danger" onclick="deleteBook(${b.id}, '${b.title.replace(/'/g, "\\'")}')">Supprimer</button>
       </div>
     </div>
@@ -364,19 +404,21 @@ async function addBook(){
   const previewsInput = document.getElementById('newPreviews');
   for(const f of previewsInput.files) formData.append('previews', f);
 
-  const res = await fetch(`${BACKEND_URL}/api/admin/books`, {
-    method: 'POST',
+  const url = editingId
+    ? `${BACKEND_URL}/api/admin/books/${editingId}`
+    : `${BACKEND_URL}/api/admin/books`;
+  const method = editingId ? 'PUT' : 'POST';
+
+  const res = await fetch(url, {
+    method,
     headers: { 'x-admin-key': adminKey },
     body: formData,
   });
 
   if(res.ok){
+    successEl.textContent = editingId ? 'Livre modifié !' : 'Livre ajouté !';
     successEl.style.display = 'block';
-    ['newTitle','newAuthor','newCategory','newPrice','newTags','newColor'].forEach(id => document.getElementById(id).value = '');
-    document.getElementById('newMature').checked = false;
-    fileInput.value = '';
-    coverInput.value = '';
-    previewsInput.value = '';
+    cancelEdit();
     loadBookList();
   } else {
     const data = await res.json();

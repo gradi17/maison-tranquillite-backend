@@ -136,6 +136,8 @@
         <label>Tags (séparés par des virgules)</label>
         <input type="text" id="newTags" placeholder="Ex: magie, one-shot, couleur">
         <p class="hint">Astuce : consultez l'onglet "Tags du site" pour vous inspirer de tags qui aident au référencement.</p>
+        <label>Description (facultatif)</label>
+        <textarea id="newDescription" rows="4" placeholder="Un résumé rapide pour donner envie de lire ce livre..." style="width:100%;padding:10px 12px;border:1px solid var(--border);border-radius:8px;font-family:'Work Sans';font-size:14px;background:var(--sky);resize:vertical;"></textarea>
         <label>Couleur de couverture de secours (si pas d'image, code hex)</label>
         <input type="text" id="newColor" placeholder="#8FA9B8">
         <div class="checkbox-row">
@@ -301,6 +303,7 @@ function editBook(id){
   document.getElementById('newCategory').value = b.category || '';
   document.getElementById('newPrice').value = b.price;
   document.getElementById('newTags').value = (b.tags || []).join(', ');
+  document.getElementById('newDescription').value = b.description || '';
   document.getElementById('newColor').value = b.color || '';
   document.getElementById('newMature').checked = !!b.mature;
   document.getElementById('submitBookBtn').textContent = 'Enregistrer les modifications';
@@ -312,7 +315,7 @@ function editBook(id){
 function cancelEdit(){
   editingId = null;
   document.getElementById('formTitle').textContent = 'Ajouter un livre';
-  ['newTitle','newAuthor','newCategory','newPrice','newTags','newColor'].forEach(id => document.getElementById(id).value = '');
+  ['newTitle','newAuthor','newCategory','newPrice','newTags','newColor','newDescription'].forEach(id => document.getElementById(id).value = '');
   document.getElementById('newMature').checked = false;
   document.getElementById('newFile').value = '';
   document.getElementById('newCover').value = '';
@@ -395,6 +398,7 @@ async function addBook(){
   formData.append('category', document.getElementById('newCategory').value);
   formData.append('price', price);
   formData.append('tags', document.getElementById('newTags').value);
+  formData.append('description', document.getElementById('newDescription').value);
   formData.append('color', document.getElementById('newColor').value);
   formData.append('mature', document.getElementById('newMature').checked);
   const fileInput = document.getElementById('newFile');

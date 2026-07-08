@@ -245,13 +245,35 @@
     <!-- ONGLET SAUVEGARDE -->
     <div class="tab-panel" id="tab-backup">
       <div class="card">
-        <h2>Sauvegarde du catalogue</h2>
+        <h2>Sauvegarde complète (recommandée)</h2>
         <p class="hint">
-          Ceci télécharge un fichier contenant tous vos livres (titres, prix, tags, catégories...)
-          — pas les fichiers PDF ni les images, juste les informations. Utile avant qu'on modifie
-          à nouveau le code du site, pour pouvoir tout remettre en place si besoin.
+          Contient tout : titres, prix, tags, catégories, <strong>ainsi que tous vos fichiers PDF et
+          images</strong>. C'est celle-ci à utiliser avant qu'on modifie le code du site, pour tout
+          remettre en place en un clic ensuite.
         </p>
-        <button onclick="exportBackup()">Exporter une sauvegarde</button>
+        <button onclick="exportFullBackup()">Télécharger la sauvegarde complète (.zip)</button>
+
+        <label style="margin-top:28px;">Restaurer une sauvegarde complète (.zip)</label>
+        <input type="file" id="importFullFile" accept=".zip">
+        <p class="hint">⚠️ Remplace entièrement le catalogue, les PDF et les images actuels.</p>
+        <button onclick="importFullBackup()">Importer et tout restaurer</button>
+        <p class="hint" id="importFullError" style="color:var(--danger);display:none;"></p>
+        <p class="hint" id="importFullSuccess" style="color:var(--sage);display:none;"></p>
+      </div>
+
+      <div class="card">
+        <h2>Sauvegarde légère (informations seulement)</h2>
+        <p class="hint">
+          Ne contient que les informations (titres, prix, tags...), pas les fichiers PDF ni les
+          images. Plus rapide, mais après un import il faudra remettre les fichiers un par un.
+        </p>
+        <button class="secondary" onclick="exportBackup()">Exporter (infos seulement)</button>
+
+        <label style="margin-top:28px;">Restaurer (infos seulement)</label>
+        <input type="file" id="importFile" accept="application/json">
+        <button class="secondary" onclick="importBackup()">Importer (infos seulement)</button>
+        <p class="hint" id="importError" style="color:var(--danger);display:none;"></p>
+        <p class="hint" id="importSuccess" style="color:var(--sage);display:none;"></p>
       </div>
     </div>
   </div>
@@ -372,6 +394,57 @@ async function deleteBook(id, title){
   loadBookList();
 }
 
+async function exportFullBackup(){
+  const res = await fetch(`${BACKEND_URL}/api/admin/export-full`, { headers: { 'x-admin-key': adminKey } });
+  const blob = await res.blob();
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = 'sauvegarde-complete.zip';
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
+async function importFullBackup(){
+  const errorEl = document.getElementById('importFullError');
+  const successEl = document.getElementById('importFullSuccess');
+  errorEl.style.display = 'none';
+  successEl.style.display = 'none';
+
+  const fileInput = document.getElementById('importFullFile');
+  const file = fileInput.files[0];
+  if(!file){
+    errorEl.textContent = 'Choisissez un fichier .zip à importer.';
+    errorEl.style.display = 'block';
+    return;
+  }
+
+  if(!confirm('Ceci va remplacer entièrement votre catalogue, vos PDF et vos images actuels. Continuer ?')) return;
+
+  const formData = new FormData();
+  formData.append('backup', file);
+
+  try{
+    const res = await fetch(`${BACKEND_URL}/api/admin/import-full`, {
+      method: 'POST',
+      headers: { 'x-admin-key': adminKey },
+      body: formData,
+    });
+    const data = await res.json();
+    if(res.ok){
+      successEl.textContent = `${data.imported} livre(s) restauré(s), avec leurs fichiers.`;
+      successEl.style.display = 'block';
+      fileInput.value = '';
+    } else {
+      errorEl.textContent = data.error || 'Une erreur est survenue.';
+      errorEl.style.display = 'block';
+    }
+  } catch(err){
+    errorEl.textContent = 'Le fichier ne semble pas être une sauvegarde valide.';
+    errorEl.style.display = 'block';
+  }
+}
+
 async function exportBackup(){
   const res = await fetch(`${BACKEND_URL}/api/admin/export`, { headers: { 'x-admin-key': adminKey } });
   const data = await res.json();
@@ -382,6 +455,48 @@ async function exportBackup(){
   a.download = 'books-backup.json';
   a.click();
   URL.revokeObjectURL(url);
+}
+
+async function importBackup(){
+  const errorEl = document.getElementById('importError');
+  const successEl = document.getElementById('importSuccess');
+  errorEl.style.display = 'none';
+  successEl.style.display = 'none';
+
+  const fileInput = document.getElementById('importFile');
+  const file = fileInput.files[0];
+  if(!file){
+    errorEl.textContent = 'Choisissez un fichier de sauvegarde à importer.';
+    errorEl.style.display = 'block';
+    return;
+  }
+
+  if(!confirm('Ceci va remplacer entièrement votre catalogue actuel. Continuer ?')) return;
+
+  try{
+    const text = await file.text();
+    const books = JSON.parse(text);
+
+    const res = await fetch(`${BACKEND_URL}/api/admin/import`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'x-admin-key': adminKey },
+      body: JSON.stringify(books),
+    });
+
+    if(res.ok){
+      const data = await res.json();
+      successEl.textContent = `${data.imported} livre(s) restauré(s) avec succès.`;
+      successEl.style.display = 'block';
+      fileInput.value = '';
+    } else {
+      const data = await res.json();
+      errorEl.textContent = data.error || 'Une erreur est survenue.';
+      errorEl.style.display = 'block';
+    }
+  } catch(err){
+    errorEl.textContent = 'Le fichier ne semble pas être une sauvegarde valide.';
+    errorEl.style.display = 'block';
+  }
 }
 
 // ---------- DONNÉES PARTAGÉES ----------

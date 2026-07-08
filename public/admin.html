@@ -1,0 +1,216 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8">
+<meta name="robots" content="noindex, nofollow">
+<title>Administration — La maison de la tranquillité</title>
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500&family=Work+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --sky:#DEEEF6; --surface:#FFFFFF; --ink:#3A4750; --ink-soft:#6B7B84;
+    --accent:#C98B67; --accent-dark:#A96F4E; --sage:#6E9280; --sage-light:#E2ECE5;
+    --border:#CFE4EE; --danger:#C9504A;
+  }
+  *{box-sizing:border-box;}
+  body{margin:0;background:var(--sky);color:var(--ink);font-family:'Work Sans',sans-serif;padding:24px;}
+  h1{font-family:'Fraunces',serif;font-weight:500;font-size:26px;margin:0 0 24px;}
+  .wrap{max-width:760px;margin:0 auto;}
+  .card{background:var(--surface);border:1px solid var(--border);border-radius:16px;padding:24px;margin-bottom:24px;}
+  label{font-size:13px;font-weight:600;display:block;margin:14px 0 6px;}
+  input[type=text], input[type=number], input[type=password], select{
+    width:100%;padding:10px 12px;border:1px solid var(--border);border-radius:8px;
+    font-family:'Work Sans';font-size:14px;background:var(--sky);
+  }
+  input[type=file]{margin-top:4px;}
+  .checkbox-row{display:flex;align-items:center;gap:8px;margin-top:14px;}
+  .checkbox-row input{width:auto;}
+  button{
+    background:var(--accent);color:white;border:none;border-radius:8px;
+    padding:11px 20px;font-weight:600;font-size:14px;cursor:pointer;margin-top:18px;
+  }
+  button:hover{background:var(--accent-dark);}
+  button.danger{background:var(--danger);}
+  button.secondary{background:var(--ink-soft);}
+  .book-row{
+    display:flex;align-items:center;justify-content:space-between;gap:12px;
+    padding:12px 0;border-bottom:1px solid var(--sky);
+  }
+  .book-row .info{flex:1;}
+  .book-row .info strong{display:block;font-size:14px;}
+  .book-row .info span{font-size:12px;color:var(--ink-soft);}
+  .mature-tag{background:var(--ink);color:white;font-size:10px;padding:2px 6px;border-radius:4px;margin-left:6px;}
+  .no-file{color:var(--danger);font-size:11px;}
+  #loginScreen, #adminScreen{display:none;}
+  .hint{font-size:12px;color:var(--ink-soft);margin-top:4px;}
+  .actions{display:flex;gap:8px;}
+  .actions button{margin-top:0;padding:8px 14px;font-size:12px;}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>Administration — La maison de la tranquillité</h1>
+
+  <div id="loginScreen" class="card" style="display:block;">
+    <label for="passwordInput">Mot de passe admin</label>
+    <input type="password" id="passwordInput" placeholder="•••••••">
+    <p class="hint" id="loginError" style="color:var(--danger);display:none;">Mot de passe incorrect.</p>
+    <button onclick="login()">Se connecter</button>
+  </div>
+
+  <div id="adminScreen">
+    <div class="card">
+      <h2 style="font-family:'Fraunces';font-weight:500;font-size:20px;margin:0 0 4px;">Ajouter un livre</h2>
+      <label>Titre</label>
+      <input type="text" id="newTitle">
+      <label>Auteur</label>
+      <input type="text" id="newAuthor">
+      <label>Catégorie</label>
+      <input type="text" id="newCategory" placeholder="Ex: Fantastique, Aventure...">
+      <label>Prix (€)</label>
+      <input type="number" step="0.01" id="newPrice">
+      <label>Tags (séparés par des virgules)</label>
+      <input type="text" id="newTags" placeholder="Ex: magie, one-shot, couleur">
+      <label>Couleur de couverture (code hex, optionnel)</label>
+      <input type="text" id="newColor" placeholder="#8FA9B8">
+      <div class="checkbox-row">
+        <input type="checkbox" id="newMature">
+        <label style="margin:0;">Contenu adulte / explicite (+18)</label>
+      </div>
+      <label>Fichier PDF</label>
+      <input type="file" id="newFile" accept="application/pdf">
+      <label>Image de couverture</label>
+      <input type="file" id="newCover" accept="image/*">
+      <p class="hint">Affichée sur la carte du livre dans la boutique.</p>
+      <label>Images d'aperçu (jusqu'à 6, pour donner envie d'acheter)</label>
+      <input type="file" id="newPreviews" accept="image/*" multiple>
+      <button onclick="addBook()">Ajouter le livre</button>
+      <p class="hint" id="addError" style="color:var(--danger);display:none;"></p>
+      <p class="hint" id="addSuccess" style="color:var(--sage);display:none;">Livre ajouté !</p>
+    </div>
+
+    <div class="card">
+      <h2 style="font-family:'Fraunces';font-weight:500;font-size:20px;margin:0 0 4px;">Catalogue actuel</h2>
+      <div id="bookList"></div>
+      <button class="secondary" onclick="exportBackup()">Exporter une sauvegarde</button>
+    </div>
+  </div>
+</div>
+
+<script>
+const BACKEND_URL = window.location.origin;
+let adminKey = '';
+
+async function login(){
+  const pwd = document.getElementById('passwordInput').value;
+  const res = await fetch(`${BACKEND_URL}/api/admin/books`, { headers: { 'x-admin-key': pwd } });
+  if(res.ok){
+    adminKey = pwd;
+    document.getElementById('loginScreen').style.display = 'none';
+    document.getElementById('adminScreen').style.display = 'block';
+    loadBookList();
+  } else {
+    document.getElementById('loginError').style.display = 'block';
+  }
+}
+
+async function loadBookList(){
+  const res = await fetch(`${BACKEND_URL}/api/admin/books`, { headers: { 'x-admin-key': adminKey } });
+  const books = await res.json();
+  const list = document.getElementById('bookList');
+  if(books.length === 0){
+    list.innerHTML = '<p class="hint">Aucun livre pour le moment.</p>';
+    return;
+  }
+  list.innerHTML = books.map(b => `
+    <div class="book-row">
+      ${b.cover ? `<img src="${BACKEND_URL}/images/${b.cover}" style="width:44px;height:56px;object-fit:cover;border-radius:6px;">` : ''}
+      <div class="info">
+        <strong>${b.title} ${b.mature ? '<span class="mature-tag">+18</span>' : ''}</strong>
+        <span>${b.author || 'Auteur inconnu'} · ${b.category} · ${b.price.toFixed(2)} €</span><br>
+        <span>${b.tags.map(t => '#' + t).join(' ')}</span>
+        ${!b.file ? '<br><span class="no-file">Aucun fichier PDF attaché</span>' : ''}
+        ${b.previews && b.previews.length ? `<br><span>${b.previews.length} image(s) d'aperçu</span>` : ''}
+      </div>
+      <div class="actions">
+        <button class="danger" onclick="deleteBook(${b.id}, '${b.title.replace(/'/g, "\\'")}')">Supprimer</button>
+      </div>
+    </div>
+  `).join('');
+}
+
+async function addBook(){
+  const errorEl = document.getElementById('addError');
+  const successEl = document.getElementById('addSuccess');
+  errorEl.style.display = 'none';
+  successEl.style.display = 'none';
+
+  const title = document.getElementById('newTitle').value.trim();
+  const price = document.getElementById('newPrice').value;
+
+  if(!title || !price){
+    errorEl.textContent = 'Le titre et le prix sont obligatoires.';
+    errorEl.style.display = 'block';
+    return;
+  }
+
+  const formData = new FormData();
+  formData.append('title', title);
+  formData.append('author', document.getElementById('newAuthor').value);
+  formData.append('category', document.getElementById('newCategory').value);
+  formData.append('price', price);
+  formData.append('tags', document.getElementById('newTags').value);
+  formData.append('color', document.getElementById('newColor').value);
+  formData.append('mature', document.getElementById('newMature').checked);
+  const fileInput = document.getElementById('newFile');
+  if(fileInput.files[0]) formData.append('pdf', fileInput.files[0]);
+  const coverInput = document.getElementById('newCover');
+  if(coverInput.files[0]) formData.append('cover', coverInput.files[0]);
+  const previewsInput = document.getElementById('newPreviews');
+  for(const f of previewsInput.files) formData.append('previews', f);
+
+  const res = await fetch(`${BACKEND_URL}/api/admin/books`, {
+    method: 'POST',
+    headers: { 'x-admin-key': adminKey },
+    body: formData,
+  });
+
+  if(res.ok){
+    successEl.style.display = 'block';
+    ['newTitle','newAuthor','newCategory','newPrice','newTags','newColor'].forEach(id => document.getElementById(id).value = '');
+    document.getElementById('newMature').checked = false;
+    fileInput.value = '';
+    coverInput.value = '';
+    previewsInput.value = '';
+    loadBookList();
+  } else {
+    const data = await res.json();
+    errorEl.textContent = data.error || 'Une erreur est survenue.';
+    errorEl.style.display = 'block';
+  }
+}
+
+async function deleteBook(id, title){
+  if(!confirm(`Supprimer "${title}" ? Cette action est définitive.`)) return;
+  await fetch(`${BACKEND_URL}/api/admin/books/${id}`, {
+    method: 'DELETE',
+    headers: { 'x-admin-key': adminKey },
+  });
+  loadBookList();
+}
+
+async function exportBackup(){
+  const res = await fetch(`${BACKEND_URL}/api/admin/export`, { headers: { 'x-admin-key': adminKey } });
+  const data = await res.json();
+  const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = 'books-backup.json';
+  a.click();
+  URL.revokeObjectURL(url);
+}
+</script>
+</body>
+</html>
